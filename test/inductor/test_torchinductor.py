@@ -17676,13 +17676,13 @@ if RUN_GPU:
             # warmup
             _, (wrapper,) = run_and_get_code(f, in1, in2, a, b, scale_a, scale_b)
 
-            # Previously indcutor decide reduction hint for a reduction kernel without considering
-            # the pointwise nodes. That will cause the third reduction kernel in this wrapper to be a
-            # persistent inner reduction and cause bad perf.
+            # Previously inductor decided reduction hint for a reduction kernel without considering
+            # the pointwise nodes. That would cause a persistent inner reduction and bad perf.
             #
-            # We fix that by making the third reduction a non-persistent reduction
-            # and improve the perf by 4.14x (451us -> 109us)
-            self.assertEqual(3, wrapper.count("def triton_red_"))
+            # We fix that by making reductions non-persistent and suppressing
+            # unnecessary splits (the outer amax no longer splits because
+            # numel >= 2*num_sm provides enough parallelism).
+            self.assertIn(wrapper.count("def triton_red_"), (2, 3))
             self.assertEqual(0, wrapper.count("def triton_per_"))
 
             if DO_PERF_TEST:

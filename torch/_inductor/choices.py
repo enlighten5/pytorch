@@ -373,12 +373,25 @@ class InductorChoices:
             return False
 
         xhint = V.graph.sizevars.optimization_hint(numel, fallback=2)
+        rhint = V.graph.sizevars.optimization_hint(reduction_numel, fallback=2)
         if xhint <= 8:
             threshold = 32768 * xhint
         elif xhint <= 16:
             threshold = 2097152
         else:
-            return False
+            # Allow cooperative reduction for larger xhint when there is enough
+            # reduction work to justify the barrier overhead. This enables fusion
+            # of broadcast pointwise epilogues (e.g. batch norm) into the
+            # reduction kernel, avoiding a full re-read of the input.
+            num_sm = DeviceProperties.create(device).multi_processor_count
+            if (
+                xhint <= 8 * num_sm
+                and rhint >= 8192
+                and xhint * rhint >= num_sm * 4096
+            ):
+                threshold = rhint  # already meets threshold
+            else:
+                return False
         # TODO(jansel): should this default on for dynamic shapes?
         # TODO(laith) What if hint(reduction_numel) >= threshold ?
         # shall we compare hints instead

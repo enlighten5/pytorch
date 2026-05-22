@@ -2842,6 +2842,27 @@ def get_threads_per_round(device: torch.device):
     return threads_per_round
 
 
+def _can_defer_single_use_dropout_random(mode: str, device: torch.device) -> bool:
+    if mode != "rand" or device.type != "cuda":
+        return False
+
+    current_node = V.graph.current_node
+    if current_node is None or len(current_node.users) != 1:
+        return False
+
+    user = next(iter(current_node.users))
+    if user.op != "call_function":
+        return False
+
+    is_threshold_op = user.target in {
+        aten.gt.Scalar,
+        aten.ge.Scalar,
+        aten.lt.Scalar,
+        aten.le.Scalar,
+    }
+    return len(user.args) >= 1 and user.args[0] is current_node and is_threshold_op
+
+
 @register_lowering(inductor_prims.random, type_promotion_kind=None)
 def inductor_random(
     size: list[int],
@@ -2895,7 +2916,10 @@ def inductor_random(
         inner_fn=inner_fn,
         ranges=[*size],
     )
-    result.realize()
+    # Single-use dropout masks can inline RNG into a fused epilogue and avoid
+    # materializing random values to global memory.
+    if not _can_defer_single_use_dropout_random(mode, device):
+        result.realize()
     return result
 
 

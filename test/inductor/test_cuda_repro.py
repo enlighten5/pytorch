@@ -1339,6 +1339,24 @@ class CudaReproTests(TestCase):
         buf2 = torch.zeros((2, 512, 768), device=device_type)
         forward(buf0, buf1, buf2)
 
+    def test_single_use_random_sinks_into_dropout_epilogue(self):
+        @torch.compile(fullgraph=True)
+        def forward(inductor_seeds, x):
+            seed = torch.ops.prims.inductor_lookup_seed.default(inductor_seeds, 2)
+            rand = torch.ops.prims.inductor_random.default([16, 32], seed, "rand")
+            mask = torch.ops.aten.gt.Scalar(rand, 0.1)
+            softmax = torch.softmax(x, dim=-1)
+            return torch.ops.aten.mul.Tensor(mask, softmax)
+
+        seeds = torch.zeros((37,), dtype=torch.int64, device=device_type)
+        x = torch.randn((16, 32), device=device_type)
+
+        _, code = run_and_get_code(forward, seeds, x)
+        kernel_code = "\n".join(code)
+
+        self.assertIn("tl.rand(", kernel_code)
+        self.assertEqual(kernel_code.count("tl.store("), 1)
+
     def test_issue100806(self):
         class Model(torch.nn.Module):
             def __init__(self) -> None:
